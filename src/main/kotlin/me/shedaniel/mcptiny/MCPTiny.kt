@@ -41,7 +41,8 @@ import java.util.zip.ZipOutputStream
 fun main(args: Array<String>) {
     require(args.size == 2) { "You must include two arguments: <minecraft version> <mcp snapshot>! " }
     val version = args.first().tryToVersion() ?: throw IllegalArgumentException("${args.first()} is not a valid version!")
-    val mcpVersion = args[1].takeIf { arg -> arg.all { it.isDigit() } } ?: throw IllegalArgumentException("${args[1]} is not a valid mcp version! (It should be in a form of date, example: 20200916)")
+    val mcpVersion = args[1]
+    //.takeIf { arg -> arg.all { it.isDigit() } } ?: throw IllegalArgumentException("${args[1]} is not a valid mcp version! (It should be in a form of date, example: 20200916)")
 
     """
         ==================================================
@@ -61,13 +62,28 @@ fun main(args: Array<String>) {
     require(YarnNamespace.getAllVersions().contains(version.toString())) { "${args.first()} is not a valid version!" }
     val mcp = MappingsContainer(version.toString(), name = "MCP").apply {
         loadTsrgFromURLZip(URL("https://files.minecraftforge.net/maven/de/oceanlabs/mcp/mcp_config/$version/mcp_config-$version.zip"))
-        loadMCPFromURLZip(URL("https://files.minecraftforge.net/maven/de/oceanlabs/mcp/mcp_snapshot/$mcpVersion-$version/mcp_snapshot-$mcpVersion-$version.zip"))
+        if (mcpVersion.endsWith("-yarn") || mcpVersion.endsWith("-mixed")) {
+            loadMCPFromURLZip(URL("https://maven.tterrag.com/de/oceanlabs/mcp/mcp_snapshot/$mcpVersion-$version/mcp_snapshot-$mcpVersion-$version.zip"))
+        } else {
+            loadMCPFromURLZip(URL("https://files.minecraftforge.net/maven/de/oceanlabs/mcp/mcp_snapshot/$mcpVersion-$version/mcp_snapshot-$mcpVersion-$version.zip"))
+        }
         mappingSource = MappingsContainer.MappingSource.MCP_TSRG
     }
     val yarn = YarnNamespace.getProvider(version.toString()).get()
 
     mcp.classes.forEach {
         it.mappedName = it.intermediaryName
+        // Use SRG instead of Yarn Intermediary for fields and methods that aren't mapped.
+        it.fields.forEach { field ->
+            if (field.mappedName == null) {
+                field.mappedName = field.intermediaryName
+            }
+        }
+        it.methods.forEach { method ->
+            if (method.mappedName == null) {
+                method.mappedName = method.intermediaryName
+            }
+        }
     }
     mcp.rewireIntermediaryFrom(yarn, true)
 
