@@ -31,11 +31,11 @@ repositories {
     maven { url "https://jitpack.io" }
     maven { url "https://dl.bintray.com/kotlin/kotlinx/" }
     maven { url "https://dl.bintray.com/kotlin/kotlin-dev/" }
-    maven { url "https://dl.bintray.com/shedaniel/linkie" }
+    maven { url "https://maven.shedaniel.me/" }
 }
 
 dependencies {
-    compile("me.shedaniel:linkie-core:1.0.47")
+    compile("me.shedaniel:linkie-core:1.0.66")
 }
 
 jar {

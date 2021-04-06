@@ -28,7 +28,7 @@ import me.shedaniel.linkie.namespaces.MCPNamespace
 import me.shedaniel.linkie.namespaces.MCPNamespace.loadMCPFromURLZip
 import me.shedaniel.linkie.namespaces.MCPNamespace.loadTsrgFromURLZip
 import me.shedaniel.linkie.namespaces.YarnNamespace
-import me.shedaniel.linkie.rewireIntermediaryFrom
+//import me.shedaniel.linkie.rewireIntermediaryFrom
 import me.shedaniel.linkie.utils.div
 import me.shedaniel.linkie.utils.info
 import me.shedaniel.linkie.utils.tryToVersion
@@ -38,7 +38,19 @@ import java.net.URL
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
-fun main(args: Array<String>) {
+import com.soywiz.korio.file.std.localVfs
+import me.shedaniel.linkie.MappingsBuilder
+import me.shedaniel.linkie.MappingsSource
+import java.io.FileOutputStream
+
+import me.shedaniel.linkie.Class
+import me.shedaniel.linkie.obfMergedName
+import me.shedaniel.linkie.getMethodByObf
+import me.shedaniel.linkie.getObfMergedDesc
+import me.shedaniel.linkie.getFieldByObfName
+import me.shedaniel.linkie.rearrangeClassMap
+
+fun main(args: Array<String>) = runBlocking {
     require(args.size == 2) { "You must include two arguments: <minecraft version> <mcp snapshot>! " }
     val version = args.first().tryToVersion() ?: throw IllegalArgumentException("${args.first()} is not a valid version!")
     val mcpVersion = args[1]
@@ -54,25 +66,27 @@ fun main(args: Array<String>) {
     info("Loading in namespaces...")
 
     Namespaces.init(LinkieConfig.DEFAULT.copy(
-        cacheDirectory = File(System.getProperty("user.dir"), "linkie-cache"),
+        cacheDirectory = (localVfs(System.getProperty("user.dir")) / "linkie-cache").jail(),
         namespaces = listOf(MCPNamespace, YarnNamespace)
     ))
     runBlocking { delay(2000) }
     runBlocking { while (MCPNamespace.reloading || YarnNamespace.reloading) delay(100) }
     require(YarnNamespace.getAllVersions().contains(version.toString())) { "${args.first()} is not a valid version!" }
-    val mcp = MappingsContainer(version.toString(), name = "MCP").apply {
+
+    val mcp = MappingsContainer(version.toString(), name = "MCP")
+    val mcpBuilder = MappingsBuilder(true, true, mcp).apply {
         loadTsrgFromURLZip(URL("https://files.minecraftforge.net/maven/de/oceanlabs/mcp/mcp_config/$version/mcp_config-$version.zip"))
-        if (mcpVersion.endsWith("-yarn") || mcpVersion.endsWith("-mixed")) {
+        if (mcpVersion.endsWith("-mixed") || mcpVersion.endsWith("-yarn")) {
             loadMCPFromURLZip(URL("https://maven.tterrag.com/de/oceanlabs/mcp/mcp_snapshot/$mcpVersion-$version/mcp_snapshot-$mcpVersion-$version.zip"))
         } else {
             loadMCPFromURLZip(URL("https://files.minecraftforge.net/maven/de/oceanlabs/mcp/mcp_snapshot/$mcpVersion-$version/mcp_snapshot-$mcpVersion-$version.zip"))
         }
-        mappingSource = MappingsContainer.MappingSource.MCP_TSRG
+        source(MappingsSource.MCP_TSRG)
     }
+    mcpBuilder.build()
     val yarn = YarnNamespace.getProvider(version.toString()).get()
 
-    mcp.classes.forEach {
-        it.mappedName = it.intermediaryName
+    mcp.classes.values.forEach {
         // Use SRG instead of Yarn Intermediary for fields and methods that aren't mapped.
         it.fields.forEach { field ->
             if (field.mappedName == null) {
@@ -88,7 +102,7 @@ fun main(args: Array<String>) {
     mcp.rewireIntermediaryFrom(yarn, true)
 
     info("Outputting to output.jar (overriding if exists!)")
-    val path = File(System.getProperty("user.dir")) / "output.jar"
+    val path = File(File(System.getProperty("user.dir")), "output.jar")
     if (path.exists()) path.delete()
     ZipOutputStream(path.outputStream()).use { zipOutputStream ->
         val zipEntry = ZipEntry("mappings/mappings.tiny")
@@ -99,4 +113,47 @@ fun main(args: Array<String>) {
         zipOutputStream.closeEntry()
     }
     info("Done!")
+}
+
+// Copied from https://github.com/linkie/linkie-core/blob/master/src/main/kotlin/me/shedaniel/linkie/Mappings.kt
+fun MappingsContainer.rewireIntermediaryFrom(
+    obf2intermediary: MappingsContainer,
+    removeUnfound: Boolean = false,
+    mapClassNames: Boolean = true,
+) {
+    val classO2I = mutableMapOf<String, Class>()
+    obf2intermediary.classes.forEach { (_, clazz) -> clazz.obfMergedName?.also { classO2I[it] = clazz } }
+    classes.values.removeIf { clazz ->
+        val replacement = classO2I[clazz.obfName.merged]
+        if (replacement != null) {
+            if (mapClassNames) {
+                clazz.mappedName = clazz.intermediaryName
+            } else {
+                clazz.mappedName = null
+            }
+            clazz.intermediaryName = replacement.intermediaryName
+
+            clazz.methods.removeIf { method ->
+                val replacementMethod = replacement.getMethodByObf(obf2intermediary, method.obfMergedName!!, method.getObfMergedDesc(this))
+                if (replacementMethod != null) {
+//                    method.mappedName = method.intermediaryName
+                    method.intermediaryName = replacementMethod.intermediaryName
+                    method.intermediaryDesc = replacementMethod.intermediaryDesc
+                }
+                replacementMethod == null && removeUnfound
+            }
+            clazz.fields.removeIf { field ->
+                val replacementField = replacement.getFieldByObfName(field.obfMergedName!!)
+                if (replacementField != null) {
+//                    field.mappedName = field.intermediaryName
+                    field.intermediaryName = replacementField.intermediaryName
+                    field.intermediaryDesc = replacementField.intermediaryDesc
+                }
+                replacementField == null && removeUnfound
+            }
+        }
+        replacement == null && removeUnfound
+    }
+
+    rearrangeClassMap()
 }
